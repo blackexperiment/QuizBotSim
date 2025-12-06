@@ -2,75 +2,60 @@
 import os
 import logging
 import time
-from typing import Dict, List
-
+import redis
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+
+import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("quizbot.worker")
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OWNER_TG_ID = int(os.getenv("OWNER_TG_ID", "0"))
+BOT_TOKEN = config.TELEGRAM_BOT_TOKEN
+OWNER_ID = config.OWNER_TG_ID
+POLL_DELAY = config.POLL_DELAY
 
-if not TELEGRAM_BOT_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN env var is required")
+if not BOT_TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN)
 
-# -------------------------
-# MAIN JOB EXECUTOR
-# -------------------------
+def _letter_to_index(letter: str) -> int:
+    return ord(letter.upper()) - ord("A")
 
-def process_formatted_job(payload: Dict):
-    """
-    Called by RQ worker when main.py enqueues a quiz job.
-    payload format:
+def _safe_send_message(chat_id: int, text: str, parse_mode=None):
+    try:
+        bot.send_message(chat_id, text, parse_mode=parse_mode)
+    except Exception as e:
+        logger.warning(f"Could not send message to {chat_id}: {e}")
 
-    {
-        "type": "formatted",
-        "owner_id": <int>,
-        "title": <str>,
-        "target": <chat_id>,
-        "questions": [
-            {
-                "q": "...",
-                "options": ["(A) ...", "(B) ...", ...],
-                "ans": "A",
-                "exp": "optional explanation or None"
-            },
-            ...
-        ]
-    }
-    """
+def process_formatted_job(payload: dict):
+    owner_id = payload.get("owner_id")
+    target_chat = payload.get("target")
+    title = payload.get("title", "Untitled Quiz")
+    questions = payload.get("questions", [])
 
-    owner_id = payload["owner_id"]
-    target_chat = payload["target"]
-    title = payload["title"]
-    questions = payload["questions"]
+    logger.info(f"Starting quiz job for {target_chat} with {len(questions)} questions")
 
-    logger.info(f"Starting quiz job for target {target_chat} with {len(questions)} questions")
+    try:
+        _safe_send_message(owner_id, f"🔄 Quiz job started: {title}")
+        header_text = f"🎯 *Starting Quiz:* {title}\nTotal Questions: {len(questions)}"
+        _safe_send_message(target_chat, header_text, parse_mode="Markdown")
+    except Exception as e:
+        logger.warning("Unable to send header: %s", e)
 
-    # Step 1 — Send header message
-    header_text = f"🎯 *Starting Quiz:*\n*{title}*\n\nTotal Questions: {len(questions)}"
-    _safe_send_message(owner_id, f"🔄 Quiz job started: {title}")
-    _safe_send_message(target_chat, header_text, parse_mode="Markdown")
-
-    # Step 2 — Post quiz polls one-by-one
-    for idx, qdata in enumerate(questions, start=1):
-
-        question_text = f"Q{idx}. {qdata['q']}"
-        options = qdata["options"]
-        correct_letter = qdata["ans"].strip().upper()
-
-        # Convert letter → index
+    for idx, q in enumerate(questions, start=1):
+        question_text = f"Q{idx}. {q['q']}"
+        options = q["options"]
+        correct_letter = q["ans"].strip().upper()
         try:
             correct_index = _letter_to_index(correct_letter)
         except:
-            # Invalid ANS, skip but alert
             _safe_send_message(owner_id, f"⚠️ Invalid ANS '{correct_letter}' in question {idx}. Skipped.")
+            logger.warning("Invalid ANS for question %d: %s", idx, correct_letter)
             continue
 
+        # Send poll
         try:
             bot.send_poll(
                 chat_id=target_chat,
@@ -80,11 +65,10 @@ def process_formatted_job(payload: Dict):
                 correct_option_id=correct_index,
                 is_anonymous=False
             )
-            logger.info(f"Sent Q{idx}")
+            logger.info("Sent Q%d", idx)
         except TelegramRetryAfter as e:
-            # Rate limit — wait and retry
             delay = int(e.retry_after) + 1
-            logger.warning(f"Rate limit hit. Waiting {delay}s")
+            logger.warning("Rate limit hit. Sleeping %s seconds", delay)
             time.sleep(delay)
             bot.send_poll(
                 chat_id=target_chat,
@@ -95,40 +79,20 @@ def process_formatted_job(payload: Dict):
                 is_anonymous=False
             )
         except TelegramForbiddenError:
-            # Bot can't send to chat — notify owner
             _safe_send_message(owner_id, f"❌ Bot cannot send messages to {target_chat}. Check permissions.")
+            logger.exception("Forbidden sending to %s", target_chat)
             return
         except Exception as e:
-            logger.exception(f"Error sending Q{idx}: {e}")
+            logger.exception("Error sending Q%d: %s", idx, e)
             _safe_send_message(owner_id, f"❌ Failed to send Question {idx}. Check logs.")
             continue
 
-        # Slow down for rate limits — safe value
-        time.sleep(0.8)
+        # optional EXP message under poll to the owner (not to channel)
+        if q.get("exp"):
+            _safe_send_message(owner_id, f"Q{idx} explanation: {q.get('exp')}")
 
-    # Step 3 — Final "Quiz Completed" message
+        time.sleep(POLL_DELAY)
+
     _safe_send_message(target_chat, "✅ *Quiz Completed!*", parse_mode="Markdown")
     _safe_send_message(owner_id, f"🎉 Quiz completed successfully: {title}")
-
     logger.info("Quiz job finished")
-
-
-# -------------------------
-# Helper functions
-# -------------------------
-
-def _safe_send_message(chat_id: int, text: str, parse_mode=None):
-    """
-    Safely send a message without crashing worker.
-    """
-    try:
-        bot.send_message(chat_id, text, parse_mode=parse_mode)
-    except Exception as e:
-        logger.warning(f"Could not send message to {chat_id}: {e}")
-
-
-def _letter_to_index(letter: str) -> int:
-    """
-    Convert A/B/C/D/E/F → 0/1/2/3/4...
-    """
-    return ord(letter.upper()) - ord("A")
