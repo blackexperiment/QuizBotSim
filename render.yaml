@@ -1,14 +1,27 @@
 services:
   - type: web
-    name: quizbot-bot
+    name: quizbot-main
     runtime: python
     pythonVersion: 3.11.10
+    envVars:
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+      OWNER_TG_ID: "${OWNER_TG_ID}"
+      REDIS_URL: "${REDIS_URL}"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python3 main.py"
 
-  - type: worker
+  - type: web
     name: quizbot-worker
     runtime: python
     pythonVersion: 3.11.10
+    envVars:
+      REDIS_URL: "${REDIS_URL}"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python3 worker.py"
+
+  - type: web
+    name: quizbot-health
+    runtime: python
+    pythonVersion: 3.11.10
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python3 health.py"
