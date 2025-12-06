@@ -4,8 +4,5 @@ rq==1.15.1
 Flask==3.0.0
 gunicorn==21.2.0
 
-# SQLite comes with Python, but for reliability on Render:
-pysqlite3-binary==0.5.2
-
-# Optional: if python-telegram-bot headers needed by some systems
-# but aiogram is enough for your bot.
+# SQLite comes with Python, but Render needs a compatible wheel
+pysqlite3-binary==0.5.4
