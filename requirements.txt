@@ -3,6 +3,5 @@ redis==5.0.1
 rq==1.15.1
 Flask==3.0.0
 gunicorn==21.2.0
-
-# SQLite comes with Python, but Render needs a compatible wheel
+honcho==1.0.1
 pysqlite3-binary==0.5.4
