@@ -1,14 +1,12 @@
 # health.py
 from flask import Flask, jsonify
-import os
-import time
-import sqlite3
+import os, time, sqlite3
 
 app = Flask(__name__)
 
-DB_PATH = os.getenv("DB_PATH", "./botdata.sqlite")
+DB_PATH = os.getenv("DB_PATH", "/home/render/project/botdata.sqlite")
 OWNER_TG_ID = os.getenv("OWNER_TG_ID", "not_set")
-APP_VERSION = os.getenv("APP_VERSION", "dev")
+APP_VERSION = os.getenv("APP_VERSION", "v1")
 
 def db_exists():
     return os.path.exists(DB_PATH)
